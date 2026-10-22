@@ -1,9 +1,7 @@
-
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { timingSafeEqual } from "node:crypto";
 
-export const runtime = "nodejs";
 
 function chaveValida(recebida: string | null) {
   const esperada = process.env.TEMI_DEVICE_KEY;
