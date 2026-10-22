@@ -11,10 +11,12 @@ export default function Home() {
   const [aVerificarLogin, setAVerificarLogin] = useState(true);
 
   const [data, setData] = useState("");
+  const [dataMinima, setDataMinima] = useState("");
   const [hora, setHora] = useState("");
   const [pessoas, setPessoas] = useState("2");
 
   useEffect(() => {
+    setDataMinima(new Date().toLocaleDateString("en-CA"));
     let ativo = true;
 
     async function verificarLogin() {
@@ -282,7 +284,7 @@ export default function Home() {
                 type="date"
                 required
                 value={data}
-                min={new Date().toLocaleDateString("en-CA")}
+                min={dataMinima || undefined}
                 onChange={(e) => setData(e.target.value)}
                 className="w-full rounded-xl border border-slate-200 bg-white p-4 outline-none focus:border-emerald-600"
               />
