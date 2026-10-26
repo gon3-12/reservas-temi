@@ -1,11 +1,10 @@
 
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
+import { createClient, type User } from "@supabase/supabase-js";
 import { QRCodeSVG } from "qrcode.react";
-import { supabase } from "@/lib/supabase";
-import type { User } from "@supabase/supabase-js";
 
 type Reserva = {
   id: string;
@@ -13,93 +12,94 @@ type Reserva = {
   reservation_date: string;
   reservation_time: string;
   people: number;
-  status: "confirmed" | "cancelled";
+  status: string;
   qr_token: string;
+  manual_code: string | null;
+  table_id: number | null;
 };
 
-export default function MinhasReservas() {
+const supabase = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+);
+
+export default function MinhasReservasPage() {
   const [utilizador, setUtilizador] = useState<User | null>(null);
   const [reservas, setReservas] = useState<Reserva[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [carregando, setCarregando] = useState(true);
   const [erro, setErro] = useState("");
-  const [aCancelar, setACancelar] = useState<string | null>(null);
-
-  const carregarReservas = useCallback(async (userId: string) => {
-    setErro("");
-
-    const { data, error } = await supabase
-      .from("reservations")
-      .select(
-        "id, reservation_number, reservation_date, reservation_time, people, status, qr_token"
-      )
-      .eq("user_id", userId)
-      .order("reservation_date", { ascending: false })
-      .order("reservation_time", { ascending: false });
-
-    if (error) {
-      console.error(error);
-      setErro("Não foi possível carregar as reservas.");
-      return;
-    }
-
-    setReservas((data ?? []) as Reserva[]);
-  }, []);
+  const [copiado, setCopiado] = useState("");
 
   useEffect(() => {
     let ativo = true;
 
-    async function iniciar() {
-      const { data, error } = await supabase.auth.getUser();
+    async function carregarReservas() {
+      setCarregando(true);
+      setErro("");
 
-      if (!ativo) return;
+      try {
+        const {
+          data: { user },
+          error: erroAuth,
+        } = await supabase.auth.getUser();
 
-      if (error || !data.user) {
-        window.location.href = "/login";
-        return;
+        if (!ativo) return;
+
+        if (erroAuth || !user) {
+          setUtilizador(null);
+          setReservas([]);
+          return;
+        }
+
+        setUtilizador(user);
+
+        const { data, error } = await supabase
+          .from("reservations")
+          .select(
+            "id, reservation_number, reservation_date, reservation_time, people, status, qr_token, manual_code, table_id"
+          )
+          .eq("user_id", user.id)
+          .order("reservation_date", { ascending: false })
+          .order("reservation_time", { ascending: false });
+
+        if (error) throw error;
+
+        if (ativo) {
+          setReservas((data ?? []) as Reserva[]);
+        }
+      } catch (e) {
+        console.error("Erro ao carregar reservas:", e);
+
+        if (ativo) {
+          setErro(
+            "Não foi possível carregar as suas reservas. Tente novamente."
+          );
+        }
+      } finally {
+        if (ativo) setCarregando(false);
       }
-
-      setUtilizador(data.user);
-      await carregarReservas(data.user.id);
-
-      if (ativo) setLoading(false);
     }
 
-    iniciar();
+    void carregarReservas();
 
     return () => {
       ativo = false;
     };
-  }, [carregarReservas]);
+  }, []);
 
-  async function cancelarReserva(reserva: Reserva) {
-    if (!utilizador || reserva.status === "cancelled") return;
+  async function copiar(texto: string, identificador: string) {
+    try {
+      await navigator.clipboard.writeText(texto);
+      setCopiado(identificador);
 
-    const confirmar = window.confirm(
-      `Queres cancelar a reserva #${reserva.reservation_number}?`
-    );
-
-    if (!confirmar) return;
-
-    setACancelar(reserva.id);
-    setErro("");
-
-    const { data, error } = await supabase
-      .from("reservations")
-      .update({ status: "cancelled" })
-      .eq("id", reserva.id)
-      .eq("user_id", utilizador.id)
-      .eq("status", "confirmed")
-      .select("id");
-
-    if (error) {
-      setErro("Não foi possível cancelar a reserva.");
-      console.error(error);
-    } else if (!data || data.length === 0) {
-      setErro("A reserva já não está disponível para cancelamento.");
+      window.setTimeout(() => {
+        setCopiado((atual) =>
+          atual === identificador ? "" : atual
+        );
+      }, 2000);
+    } catch {
+      setErro("Não foi possível copiar. Selecione o texto manualmente.");
     }
-
-    await carregarReservas(utilizador.id);
-    setACancelar(null);
   }
 
   function formatarData(data: string) {
@@ -112,191 +112,366 @@ export default function MinhasReservas() {
     }).format(new Date(ano, mes - 1, dia));
   }
 
-  function formatarNumero(numero: number) {
-    return String(numero).padStart(6, "0");
+  function formatarHora(hora: string) {
+    return hora.slice(0, 5);
+  }
+
+  function estadoReserva(estado: string) {
+    if (estado === "confirmed") {
+      return {
+        texto: "Confirmada",
+        classes: "bg-emerald-100 text-emerald-800",
+      };
+    }
+
+    if (estado === "cancelled") {
+      return {
+        texto: "Cancelada",
+        classes: "bg-red-100 text-red-700",
+      };
+    }
+
+    return {
+      texto: estado,
+      classes: "bg-gray-100 text-gray-700",
+    };
   }
 
   return (
-    <main className="min-h-screen bg-[#F7F8F5] text-[#173B35]">
-      <header className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-4 px-6 py-6">
-        <Link href="/" className="text-xl font-bold">
-          Temi<span className="text-emerald-600">Reservations</span>
-        </Link>
+    <main className="min-h-screen bg-[#F5F8F7] px-4 py-10 text-[#173B35]">
+      <div className="mx-auto max-w-5xl">
+        {/* CABEÇALHO */}
+        <header className="mb-9">
+          <Link
+            href="/"
+            className="mb-5 inline-flex items-center gap-2 text-sm font-medium text-[#177D5A] hover:underline"
+          >
+            ← Voltar ao início
+          </Link>
 
-        <Link
-          href="/"
-          className="rounded-full bg-[#173B35] px-5 py-2.5 text-sm font-semibold text-white"
-        >
-          ← Página inicial
-        </Link>
-      </header>
-
-      <section className="mx-auto max-w-5xl px-6 py-12">
-        <p className="text-sm font-semibold uppercase tracking-wider text-emerald-700">
-          Área pessoal
-        </p>
-
-        <h1 className="mt-3 text-4xl font-bold">
-          As minhas reservas
-        </h1>
-
-        <p className="mt-3 text-slate-500">
-          Consulta os teus códigos QR e gere as tuas reservas.
-        </p>
-
-        {loading ? (
-          <div className="mt-10 rounded-2xl bg-white p-8 text-center">
-            A carregar reservas...
-          </div>
-        ) : (
-          <>
-            {erro && (
-              <p
-                role="alert"
-                className="mt-6 rounded-xl bg-red-50 p-4 text-red-700"
-              >
-                {erro}
+          <div className="flex flex-wrap items-center justify-between gap-4">
+            <div>
+              <p className="mb-2 text-sm font-semibold uppercase tracking-[0.2em] text-[#177D5A]">
+                TEMI RESTAURANT
               </p>
-            )}
 
-            {reservas.length === 0 ? (
-              <div className="mt-10 rounded-3xl bg-white p-12 text-center shadow-sm">
-                <h2 className="text-2xl font-bold">
-                  Ainda não tens reservas
-                </h2>
+              <h1 className="text-3xl font-bold tracking-tight sm:text-4xl">
+                As minhas reservas
+              </h1>
 
-                <p className="mt-3 text-slate-500">
-                  Faz a tua primeira reserva para receberes o código QR.
-                </p>
+              <p className="mt-3 text-base text-[#60736B]">
+                Consulte os detalhes e apresente a sua reserva
+                ao nosso assistente temi.
+              </p>
+            </div>
 
-                <Link
-                  href="/#reservar"
-                  className="mt-6 inline-block rounded-full bg-[#173B35] px-6 py-3 font-semibold text-white"
+            <Link
+              href="/reservas"
+              className="rounded-2xl bg-[#173B35] px-6 py-4 text-center font-semibold text-white transition hover:bg-[#24594E]"
+            >
+              + Nova reserva
+            </Link>
+          </div>
+        </header>
+
+        {/* ERRO */}
+        {erro && (
+          <div
+            role="alert"
+            className="mb-6 rounded-2xl border border-red-200 bg-red-50 p-4 text-red-800"
+          >
+            {erro}
+          </div>
+        )}
+
+        {/* CARREGAMENTO */}
+        {carregando && (
+          <div className="rounded-3xl bg-white p-12 text-center shadow-sm">
+            <div className="mx-auto mb-5 h-10 w-10 animate-spin rounded-full border-4 border-[#DCEBE3] border-t-[#177D5A]" />
+
+            <p className="text-lg font-medium">
+              A carregar as suas reservas...
+            </p>
+          </div>
+        )}
+
+        {/* UTILIZADOR NÃO AUTENTICADO */}
+        {!carregando && !utilizador && (
+          <div className="rounded-3xl bg-white px-6 py-14 text-center shadow-sm">
+            <div className="mb-5 text-5xl">🔐</div>
+
+            <h2 className="text-2xl font-bold">
+              Inicie sessão para continuar
+            </h2>
+
+            <p className="mx-auto mt-3 max-w-md text-[#60736B]">
+              Para proteger os seus dados, apenas pode consultar
+              as reservas associadas à sua conta.
+            </p>
+
+            <Link
+              href="/login"
+              className="mt-7 inline-block rounded-xl bg-[#173B35] px-7 py-4 font-semibold text-white"
+            >
+              Iniciar sessão
+            </Link>
+          </div>
+        )}
+
+        {/* SEM RESERVAS */}
+        {!carregando &&
+          utilizador &&
+          !erro &&
+          reservas.length === 0 && (
+            <div className="rounded-3xl bg-white px-6 py-14 text-center shadow-sm">
+              <div className="mb-5 text-5xl">📅</div>
+
+              <h2 className="text-2xl font-bold">
+                Ainda não tem reservas
+              </h2>
+
+              <p className="mt-3 text-[#60736B]">
+                Faça a sua primeira reserva e venha visitar-nos!
+              </p>
+
+              <Link
+                href="/reservas"
+                className="mt-7 inline-block rounded-xl bg-[#173B35] px-7 py-4 font-semibold text-white"
+              >
+                Fazer reserva
+              </Link>
+            </div>
+          )}
+
+        {/* LISTA DE RESERVAS */}
+        {!carregando && utilizador && (
+          <div className="space-y-6">
+            {reservas.map((reserva) => {
+              const estado = estadoReserva(reserva.status);
+              const confirmada = reserva.status === "confirmed";
+
+              return (
+                <article
+                  key={reserva.id}
+                  className="overflow-hidden rounded-3xl border border-[#E2EBE6] bg-white shadow-sm"
                 >
-                  Fazer reserva
-                </Link>
-              </div>
-            ) : (
-              <div className="mt-10 space-y-6">
-                {reservas.map((reserva) => (
-                  <article
-                    key={reserva.id}
-                    className="rounded-3xl border border-slate-100 bg-white p-6 shadow-sm md:p-8"
-                  >
-                    <div className="flex flex-wrap items-start justify-between gap-4">
-                      <div>
-                        <p className="text-sm text-slate-500">
-                          Código da reserva
-                        </p>
+                  {/* CABEÇALHO DA RESERVA */}
+                  <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#E8F0EB] px-6 py-5 sm:px-8">
+                    <div>
+                      <p className="text-sm text-[#60736B]">
+                        Número da reserva
+                      </p>
 
-                        <h2 className="mt-1 text-3xl font-bold">
-                          #{formatarNumero(reserva.reservation_number)}
-                        </h2>
-                      </div>
-
-                      <span
-                        className={`rounded-full px-4 py-2 text-sm font-semibold ${
-                          reserva.status === "confirmed"
-                            ? "bg-emerald-100 text-emerald-800"
-                            : "bg-red-100 text-red-700"
-                        }`}
-                      >
-                        {reserva.status === "confirmed"
-                          ? "Confirmada"
-                          : "Cancelada"}
-                      </span>
+                      <h2 className="mt-1 text-2xl font-bold">
+                        Nº{" "}
+                        {String(reserva.reservation_number).padStart(
+                          6,
+                          "0"
+                        )}
+                      </h2>
                     </div>
 
-                    <div className="mt-7 grid gap-6 border-t border-slate-100 pt-6 md:grid-cols-2">
-                      {/* DETALHES */}
-                      <div className="space-y-5">
-                        <div>
-                          <p className="text-sm text-slate-500">
-                            📅 Data
-                          </p>
-                          <p className="mt-1 font-semibold">
-                            {formatarData(reserva.reservation_date)}
+                    <span
+                      className={`rounded-full px-4 py-2 text-sm font-semibold ${estado.classes}`}
+                    >
+                      {estado.texto}
+                    </span>
+                  </div>
+
+                  {/* INFORMAÇÕES */}
+                  <div className="grid gap-4 px-6 py-6 sm:grid-cols-3 sm:px-8">
+                    <div className="rounded-2xl bg-[#F5F8F7] p-4">
+                      <p className="mb-2 text-sm text-[#60736B]">
+                        📅 Data
+                      </p>
+
+                      <p className="font-semibold">
+                        {formatarData(reserva.reservation_date)}
+                      </p>
+                    </div>
+
+                    <div className="rounded-2xl bg-[#F5F8F7] p-4">
+                      <p className="mb-2 text-sm text-[#60736B]">
+                        🕒 Hora
+                      </p>
+
+                      <p className="font-semibold">
+                        {formatarHora(reserva.reservation_time)}
+                      </p>
+                    </div>
+
+                    <div className="rounded-2xl bg-[#F5F8F7] p-4">
+                      <p className="mb-2 text-sm text-[#60736B]">
+                        👥 Pessoas
+                      </p>
+
+                      <p className="font-semibold">
+                        {reserva.people}{" "}
+                        {reserva.people === 1
+                          ? "pessoa"
+                          : "pessoas"}
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* IDENTIFICAÇÃO NO TEMI */}
+                  {confirmada && (
+                    <div className="px-6 pb-8 sm:px-8">
+                      <div className="rounded-3xl border border-[#D8E8DE] bg-[#F3FAF5] p-5 sm:p-7">
+                        <div className="mb-6 text-center">
+                          <h3 className="text-xl font-bold">
+                            Apresente a sua reserva ao temi
+                          </h3>
+
+                          <p className="mt-2 text-sm text-[#60736B]">
+                            Pode utilizar o QR Code ou introduzir
+                            os dados manualmente.
                           </p>
                         </div>
 
-                        <div>
-                          <p className="text-sm text-slate-500">
-                            🕒 Hora
-                          </p>
-                          <p className="mt-1 font-semibold">
-                            {reserva.reservation_time.slice(0, 5)}
+                        {/* QR CODE */}
+                        <div className="mx-auto flex max-w-sm flex-col items-center rounded-2xl bg-white p-6 shadow-sm">
+                          <div className="rounded-xl border border-[#E4ECE6] bg-white p-3">
+                            <QRCodeSVG
+                              value={`TEMI-RESERVA:${reserva.qr_token}`}
+                              size={210}
+                              level="H"
+                              bgColor="#FFFFFF"
+                              fgColor="#173B35"
+                              marginSize={1}
+                            />
+                          </div>
+
+                          <p className="mt-4 text-center text-sm font-medium">
+                            Mostre este código à câmara do robô.
                           </p>
                         </div>
 
-                        <div>
-                          <p className="text-sm text-slate-500">
-                            👥 Número de pessoas
-                          </p>
-                          <p className="mt-1 font-semibold">
-                            {reserva.people}
-                          </p>
+                        {/* SEPARADOR */}
+                        <div className="my-7 flex items-center gap-4">
+                          <div className="h-px flex-1 bg-[#D6E5DA]" />
+
+                          <span className="text-sm font-semibold text-[#60736B]">
+                            OU
+                          </span>
+
+                          <div className="h-px flex-1 bg-[#D6E5DA]" />
                         </div>
 
-                        {reserva.status === "confirmed" && (
-                          <button
-                            type="button"
-                            disabled={aCancelar === reserva.id}
-                            onClick={() => cancelarReserva(reserva)}
-                            className="rounded-xl border border-red-200 px-5 py-3 text-sm font-semibold text-red-600 hover:bg-red-50 disabled:opacity-50"
-                          >
-                            {aCancelar === reserva.id
-                              ? "A cancelar..."
-                              : "Cancelar reserva"}
-                          </button>
-                        )}
-                      </div>
+                        {/* CONFIRMAÇÃO MANUAL */}
+                        <div className="rounded-2xl border border-[#D6E5DA] bg-white p-5 sm:p-6">
+                          <div className="mb-5">
+                            <h4 className="text-lg font-bold">
+                              Não consegue ler o QR Code?
+                            </h4>
 
-                      {/* CÓDIGO QR */}
-                      <div className="flex flex-col items-center justify-center rounded-2xl bg-[#F7F8F5] p-6">
-                        {reserva.status === "confirmed" ? (
-                          <>
-                            <div className="rounded-xl bg-white p-4 shadow-sm">
-                              <QRCodeSVG
-                                value={`TEMI-RESERVA:${reserva.qr_token}`}
-                                size={190}
-                                level="H"
-                                marginSize={0}
-                                bgColor="#FFFFFF"
-                                fgColor="#173B35"
-                              />
-                            </div>
-
-                            <p className="mt-4 text-center text-sm font-semibold">
-                              Código QR da reserva
-                            </p>
-
-                            <p className="mt-2 max-w-xs text-center text-xs text-slate-500">
-                              Apresenta este código ao robô temi
-                              quando chegares.
-                            </p>
-                          </>
-                        ) : (
-                          <div className="text-center">
-                            <p className="text-4xl">🚫</p>
-
-                            <p className="mt-3 font-semibold text-red-600">
-                              QR Code indisponível
-                            </p>
-
-                            <p className="mt-2 text-sm text-slate-500">
-                              Esta reserva foi cancelada.
+                            <p className="mt-2 text-sm text-[#60736B]">
+                              No temi, escolha a opção
+                              {" "}
+                              <strong>
+                                Introduzir número da reserva
+                              </strong>
+                              {" "}
+                              e utilize os dados abaixo.
                             </p>
                           </div>
-                        )}
+
+                          <div className="grid gap-4 sm:grid-cols-2">
+                            {/* NÚMERO */}
+                            <div className="rounded-xl bg-[#F5F8F7] p-4">
+                              <p className="text-xs font-medium text-[#60736B]">
+                                Número da reserva
+                              </p>
+
+                              <p className="mt-2 text-2xl font-bold tracking-wide">
+                                {String(
+                                  reserva.reservation_number
+                                ).padStart(6, "0")}
+                              </p>
+
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  copiar(
+                                    String(
+                                      reserva.reservation_number
+                                    ),
+                                    `numero-${reserva.id}`
+                                  )
+                                }
+                                className="mt-3 text-sm font-semibold text-[#177D5A] hover:underline"
+                              >
+                                {copiado === `numero-${reserva.id}`
+                                  ? "✓ Copiado"
+                                  : "Copiar número"}
+                              </button>
+                            </div>
+
+                            {/* CÓDIGO MANUAL */}
+                            <div className="rounded-xl bg-[#F5F8F7] p-4">
+                              <p className="text-xs font-medium text-[#60736B]">
+                                Código de confirmação
+                              </p>
+
+                              {reserva.manual_code ? (
+                                <>
+                                  <p className="mt-2 break-all font-mono text-xl font-bold tracking-wider sm:text-2xl">
+                                    {reserva.manual_code}
+                                  </p>
+
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      copiar(
+                                        reserva.manual_code!,
+                                        `codigo-${reserva.id}`
+                                      )
+                                    }
+                                    className="mt-3 text-sm font-semibold text-[#177D5A] hover:underline"
+                                  >
+                                    {copiado === `codigo-${reserva.id}`
+                                      ? "✓ Copiado"
+                                      : "Copiar código"}
+                                  </button>
+                                </>
+                              ) : (
+                                <p className="mt-2 text-sm text-red-700">
+                                  Código ainda não disponível.
+                                </p>
+                              )}
+                            </div>
+                          </div>
+
+                          <p className="mt-5 text-xs leading-relaxed text-[#60736B]">
+                            🔒 Este código é privado. Não o partilhe
+                            com outras pessoas, pois permite confirmar
+                            a sua reserva no restaurante.
+                          </p>
+                        </div>
                       </div>
                     </div>
-                  </article>
-                ))}
-              </div>
-            )}
-          </>
+                  )}
+
+                  {/* RESERVA CANCELADA */}
+                  {!confirmada && (
+                    <div className="px-6 pb-7 sm:px-8">
+                      <div className="rounded-2xl bg-[#F5F8F7] p-5 text-sm text-[#60736B]">
+                        Esta reserva não está ativa e não pode
+                        ser utilizada para entrar no restaurante.
+                      </div>
+                    </div>
+                  )}
+                </article>
+              );
+            })}
+          </div>
         )}
-      </section>
+
+        {/* RODAPÉ */}
+        <footer className="mt-12 text-center text-sm text-[#60736B]">
+          TEMI RESTAURANT · Sistema de reservas inteligente
+        </footer>
+      </div>
     </main>
   );
 }
