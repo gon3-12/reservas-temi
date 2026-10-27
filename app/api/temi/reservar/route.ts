@@ -3,7 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 
-export const runtime = "nodejs";
+
 
 function chaveValida(recebida: string, esperada: string) {
   if (!recebida || !esperada) return false;
