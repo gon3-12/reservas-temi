@@ -49,20 +49,21 @@ export default function MinhasReservasPage() {
         }
 
         setUtilizador(user);
-        
-        // Associar reservas criadas no temi à conta autenticada,
-        // desde que o email do utilizador esteja confirmado.
+
+        // Associar reservas feitas no robô temi à conta do cliente
         if (user.email_confirmed_at) {
-          const { error: erroAssociacao } = await supabase.rpc(
-            "claim_temi_reservations"
-          );
+          const { data: associadas, error: erroAssociacao } =
+            await supabase.rpc("claim_temi_reservations");
 
           if (erroAssociacao) {
-            console.error(
-              "Erro ao associar reservas do temi:",
-              erroAssociacao
+            console.error("Erro ao associar reservas:", erroAssociacao);
+            throw new Error(
+              "Não foi possível associar as reservas do robô: " +
+                erroAssociacao.message
             );
           }
+
+          console.log("Reservas associadas:", associadas);
         }
 
         const { data, error } = await supabase
